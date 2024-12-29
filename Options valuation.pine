@@ -1,0 +1,80 @@
+//@version=5
+indicator("Dynamic Options Price Valuation", shorttitle="Dynamic Opt Price", overlay=false)
+
+// Inputs for Black-Scholes model
+option_type = input.string("Call", title="Option Type", options=["Call", "Put"])
+use_chart_price = input.bool(true, title="Use Chart Price (Close) for Spot Price?")
+spot_price = use_chart_price ? close : input.float(100.0, title="Spot Price (S)")
+
+// Dynamic Strike Price List
+strike_price_list = input.string("100, 105, 110, 115, 120", title="Strike Prices (comma-separated)")
+strike_prices = array.new_float(0)
+for price in str.split(strike_price_list, ",")
+    array.push(strike_prices, str.tonumber(str.trim(price)))
+
+// User-selected Strike Price Index
+strike_price_index = input.int(0, title="Select Strike Price Index", minval=0, maxval=4)  // Manually set maxval to match the size of the array
+
+// Fetch selected Strike Price
+selected_strike_price = array.size(strike_prices) > strike_price_index ? array.get(strike_prices, strike_price_index) : na
+
+// Expiry Calculation
+expiry_date = input.time(timestamp("2024-12-31 23:59"), title="Expiry Date (UTC)")
+days_to_expiry = math.max(0, (expiry_date - time) / 86400000)
+
+// Volatility and Risk-Free Rate
+volatility = input.float(20.0, title="Volatility (%)")
+risk_free_rate = input.float(5.0, title="Risk-Free Rate (%)")
+
+// Convert inputs
+T = days_to_expiry / 365 // Convert days to years
+sigma = volatility / 100  // Convert percentage to decimal
+r = risk_free_rate / 100  // Convert percentage to decimal
+
+// Error function approximation
+calc_erf(x) =>
+    a1 = 0.254829592
+    a2 = -0.284496736
+    a3 = 1.421413741
+    a4 = -1.453152027
+    a5 = 1.061405429
+    p = 0.3275911
+
+    sign = x < 0 ? -1 : 1
+    abs_x = math.abs(x)
+
+    t = 1.0 / (1.0 + p * abs_x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-abs_x * abs_x)
+    
+    sign * y
+
+// Standard normal CDF
+calc_cdf(x) =>
+    0.5 * (1 + calc_erf(x / math.sqrt(2)))
+
+// Black-Scholes formula components
+calc_d1(S, K, T, r, sigma) => 
+    (math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * math.sqrt(T))
+
+calc_d2(d1, sigma, T) => 
+    d1 - sigma * math.sqrt(T)
+
+calc_bs_price(S, K, T, r, sigma, option_type) => 
+    d1 = calc_d1(S, K, T, r, sigma)
+    d2 = calc_d2(d1, sigma, T)
+    if option_type == "Call"
+        S * calc_cdf(d1) - K * math.exp(-r * T) * calc_cdf(d2)
+    else
+        K * math.exp(-r * T) * calc_cdf(-d2) - S * calc_cdf(-d1)
+
+// Calculate option price
+option_price = na(selected_strike_price) ? na : calc_bs_price(spot_price, selected_strike_price, T, r, sigma, option_type)
+
+// Round to two decimal places
+option_price_rounded = na(option_price) ? na : math.round(option_price * 100) / 100
+
+// Display the result
+if not na(option_price)
+    label.new(bar_index, na, "Spot: " + str.tostring(spot_price) +  "\nStrike: " + str.tostring(selected_strike_price) + "\nExpiry (Days): " + str.tostring(days_to_expiry) + "\nTheo Price: " + str.tostring(option_price_rounded), style=label.style_diamond, color=color.new(color.blue, 90))
+
+plot(option_price, title="Option Price", color=color.green, linewidth=2)
